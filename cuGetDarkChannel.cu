@@ -10,13 +10,6 @@
 Device code
 */
 
-// Set this const according to b2
-#define B2 7
-// Set this const according to wnd
-#define WND 10
-// derived const for vector size in kernel function
-#define VEC_SIZE ((WND+WND+1)*(WND+WND+1))
-
 // check error
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=false)

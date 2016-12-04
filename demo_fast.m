@@ -6,8 +6,8 @@ warning('off','all');
 
 % Config
 useGPU = true;
-omega =0.95;
-win_size = 5;
+omega = 0.95;
+win_size = 3;
 
 
 tic;
@@ -18,7 +18,7 @@ image = imresize(image, 2.5);
 result = dehaze_fast(image, omega, win_size, useGPU);
 toc;
 
-figure, imshow(image)
+% figure, imshow(image)
 figure, imshow(result)
 
 warning('on','all');

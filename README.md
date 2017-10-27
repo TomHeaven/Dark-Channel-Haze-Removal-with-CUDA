@@ -31,7 +31,7 @@ for Matlab2015b or later.
 # Acceleration
 
 
-Running Time Comparison
+Running Time Comparison (seconds)
 
 | Image Size | CPU | GPU |
 |:--:|:--:|:--:|

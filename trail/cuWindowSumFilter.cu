@@ -29,22 +29,22 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=f
 /**
 % input:
 % startThreadNum, one task may require several launches, this param records the start thread num to continue woring.
-% r,g,b, vector form of R,G,B image with size of x_height * x_width
-% x_height, x_width, size of R,G,B image
+% image, vector form of image with size of x_height * x_width
+% x_height, x_width, size of image
 % output:
-% darkChannel, output vector with size of x_height * x_width
+% sumImg, output vector with size of x_height * x_width
 % d_info, vector for debug
 */
-void __global__  minKernel(const int startThreadNum, const double* r, const double* g, const double* b, const int x_height, const int x_width, const int wnd, double* darkChannel, float* d_info) {
+void __global__  winSumFilterKernel(const int startThreadNum, const double* image, const int x_height, const int x_width, const int radius, double* sumImg, float* d_info) {
   const int idx = blockDim.x * blockIdx.x + threadIdx.x + startThreadNum;
   int i = idx / x_width;
   int j = idx % x_width;
 
   int off = idx; // i + j * x_height; //zero based
-  int rmin = max(i - wnd/2, 0);
-  int rmax = min(i + wnd/2, x_height-1);
-  int cmin = max(j - wnd/2, 0);
-  int cmax = min(j + wnd/2, x_width -1);
+  int rmin = max(i - radius, 0);
+  int rmax = min(i + radius, x_height-1);
+  int cmin = max(j - radius, 0);
+  int cmax = min(j + radius, x_width -1);
 
   #ifdef DEBUG
   if (idx == 0) {
@@ -58,21 +58,18 @@ void __global__  minKernel(const int startThreadNum, const double* r, const doub
     d_info[7] = cmax;
     d_info[8] = x_height;
     d_info[9] = x_width;
-    d_info[10] = wnd;
+    d_info[10] = radius;
   }
   #endif
-  double minValue = 99999;
+    double s = 0;
   for(int y = cmin; y <= cmax; y++) {
     for(int x = rmin; x <= rmax; x++)
     {
-      //int off_tmp = x  + y * x_height;
       int off_tmp = x*x_width  + y;
-      minValue = r[off_tmp] < minValue ? r[off_tmp] : minValue;
-      minValue = g[off_tmp] < minValue ? g[off_tmp] : minValue;
-      minValue = b[off_tmp] < minValue ? b[off_tmp] : minValue;
+      s += image[off_tmp];
     }
   }
-  darkChannel[off] = minValue;
+  sumImg[off] = s;
 }
 
 /*
@@ -82,11 +79,11 @@ void mexFunction(int nlhs, mxArray *plhs[],
   int nrhs, mxArray const *prhs[])
   {
     /* Declare all variables.*/
-    mxGPUArray const *r, *g, *b;
-    mxGPUArray * darkChannel;
+    mxGPUArray const * image;
+    mxGPUArray * sumImg;
 
-    double const * d_r, *d_g, *d_b;
-    double * d_darkChannel;
+    double const * d_image;
+    double * d_sumImg;
     double * ptr;
 
     char const * const errId = "parallel:gpu:mexGPUExample:InvalidInput";
@@ -95,39 +92,37 @@ void mexFunction(int nlhs, mxArray *plhs[],
     /* Choose a reasonably sized number of threads for the block. */
     // Don't set threadsPerBlock too big or the shared memory may exceed block
     // shared memory limit and cause CUDA_ILLEGAL_ADDRESS error !!!
-    int const threadsPerBlock = 16;
+    int const threadsPerBlock = 32;
     int blocksPerGrid = 1024;
 
     /* Initialize the MathWorks GPU API. */
     mxInitGPU();
     /* Throw an error if the input is not a GPU array. */
-    if ((nrhs != 5) || !(mxIsGPUArray(prhs[0]))) {
+    if ((nrhs != 3) || !(mxIsGPUArray(prhs[0]))) {
       mexErrMsgIdAndTxt(errId, errMsg);
     }
 
-    r = mxGPUCreateFromMxArray(prhs[0]);
-    g = mxGPUCreateFromMxArray(prhs[1]);
-    b = mxGPUCreateFromMxArray(prhs[2]);
+    image = mxGPUCreateFromMxArray(prhs[0]);
 
-    ptr = mxGetPr(prhs[3]);
+    ptr = mxGetPr(prhs[1]);
     int x_height = int(ptr[0] + 0.5);
-    ptr = mxGetPr(prhs[4]);
-    int win_size = int(ptr[0] + 0.5);
+    ptr = mxGetPr(prhs[2]);
+    int radius = int(ptr[0] + 0.5);
 
 
-    int X_length = (int)(mxGPUGetNumberOfElements(r));
+    int X_length = (int)(mxGPUGetNumberOfElements(image));
     int x_width = X_length / x_height;
 
     #ifdef DEBUG
-    printf("nrhs = %d, x_height = %d, win_size = %d\n", nrhs, x_height, win_size);
+    printf("nrhs = %d, x_height = %d, radius = %d\n", nrhs, x_height, radius);
     #endif
 
     #ifdef DEBUG
-    printf("mxGPUGetClassID(A) = %d, mxDOUBLE_CLASS = %d\n", mxGPUGetClassID(r), mxDOUBLE_CLASS);
+    printf("mxGPUGetClassID(A) = %d, mxDOUBLE_CLASS = %d\n", mxGPUGetClassID(image), mxDOUBLE_CLASS);
     #endif
 
     // Verify that X really is a double array before extracting the pointer.
-    if (mxGPUGetClassID(r) != mxDOUBLE_CLASS) {
+    if (mxGPUGetClassID(image) != mxDOUBLE_CLASS) {
       mexErrMsgIdAndTxt(errId, errMsg);
     }
 
@@ -136,17 +131,15 @@ void mexFunction(int nlhs, mxArray *plhs[],
     #endif
 
     /*  Extract a pointer to the input data on the device. */
-    d_r = (double const *)(mxGPUGetDataReadOnly(r));
-    d_g = (double const *)(mxGPUGetDataReadOnly(g));
-    d_b = (double const *)(mxGPUGetDataReadOnly(b));
+    d_image = (double const *)(mxGPUGetDataReadOnly(image));
 
     /* Create a GPUArray to hold the result and get its underlying pointer. */
-    darkChannel = mxGPUCreateGPUArray(mxGPUGetNumberOfDimensions(r),
-    mxGPUGetDimensions(r),
-    mxGPUGetClassID(r),
-    mxGPUGetComplexity(r),
+    sumImg = mxGPUCreateGPUArray(mxGPUGetNumberOfDimensions(image),
+    mxGPUGetDimensions(image),
+    mxGPUGetClassID(image),
+    mxGPUGetComplexity(image),
     MX_GPU_DO_NOT_INITIALIZE);
-    d_darkChannel = (double *)(mxGPUGetData(darkChannel));
+    d_sumImg = (double *)(mxGPUGetData(sumImg));
 
     #ifdef DEBUG
     printf("break point 2\n");
@@ -163,7 +156,7 @@ void mexFunction(int nlhs, mxArray *plhs[],
     int thread_num = blocksPerGrid * threadsPerBlock;
     for(int startThreadNum = 0; startThreadNum < x_width*x_height; startThreadNum += thread_num) {
       // minKernel(const int startThreadNum, const double* r, onst double* g，onst double* b, const int x_height, const int x_width, const int wnd, double* darkChannel, float* d_info)
-      minKernel<<<blocksPerGrid, threadsPerBlock>>>(startThreadNum, d_r, d_g, d_b, x_height, x_width,  win_size, d_darkChannel, d_info);
+      winSumFilterKernel<<<blocksPerGrid, threadsPerBlock>>>(startThreadNum, d_image, x_height, x_width, radius, d_sumImg, d_info);
       gpuErrchk( cudaPeekAtLastError() );
       gpuErrchk( cudaDeviceSynchronize() );
     }
@@ -175,13 +168,11 @@ void mexFunction(int nlhs, mxArray *plhs[],
     #endif
     cudaFree(d_info);
     /* Wrap the result up as a MATLAB gpuArray for return. */
-    plhs[0] = mxGPUCreateMxArrayOnGPU(darkChannel);
+    plhs[0] = mxGPUCreateMxArrayOnGPU(sumImg);
     /*
     * The mxGPUArray pointers are host-side structures that refer to device
     * data. These must be destroyed before leaving the MEX function.
     */
-    mxGPUDestroyGPUArray(r);
-    mxGPUDestroyGPUArray(g);
-    mxGPUDestroyGPUArray(b);
-    mxGPUDestroyGPUArray(darkChannel);
+    mxGPUDestroyGPUArray(image);
+    mxGPUDestroyGPUArray(sumImg);
   }

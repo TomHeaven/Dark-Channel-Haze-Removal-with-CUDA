@@ -38,7 +38,7 @@ trans_est = get_transmission_estimate(image, atmosphere, omega, win_size, useGPU
 
 fprintf('tm3 = %f\n', toc(start)); start = tic;
 
-x = guided_filter(rgb2gray(image), trans_est, r, res, true);  %1.75 s
+x = guided_filter(rgb2gray(image), trans_est, r, res, useGPU);  %1.75 s
 
 fprintf('tm4 = %f\n', toc(start)); 
 
